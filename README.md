@@ -6,7 +6,7 @@ Learn how to install and configure Alpine Linux on a Banana Pi M1 single-board c
 BASE_URL="https://dl-cdn.alpinelinux.org/alpine"
 
 # 1. Recupera tutte le directory vX.Y, ordinale in modo decrescente
-branches=$(wget -qO- "$BASE_URL/" | grep -oE 'v[0-9]+\.[0-9]+/' | sed 's#/##' | sort -Vr)
+branches=$(wget -qO- https://dl-cdn.alpinelinux.org/alpine/ | grep -oE 'v[0-9]+\.[0-9]+/' | sed 's#/##' | awk '!seen[$0]++' | sort -Vr)
 
 # 2. Cicla sui rami dal più recente e cerca un tarball valido
 for branch in $branches; do
