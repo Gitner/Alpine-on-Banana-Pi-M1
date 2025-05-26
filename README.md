@@ -1,5 +1,7 @@
 # Alpine-on-Banana-Pi-M1
 Learn how to install and configure Alpine Linux on a Banana Pi M1 single-board computer. This step-by-step guide covers everything from preparing the bootable media to initial system setup, with tips for optimizing Alpine Linux for lightweight and efficient performance on ARM-based hardware. Perfect for minimalists and DIY enthusiasts.
+
+Download
 ```
 #!/bin/sh
 
@@ -27,4 +29,34 @@ done
 
 echo "❌ Nessuna release alpine-uboot trovata in nessun ramo disponibile."
 exit 1
+```
+Estrazione
+```
+#!/bin/sh
+
+ARCHIVE=alpine-uboot-*.tar.gz
+
+# Pulisce cartella boot se esiste
+rm -rf boot
+
+# Estrae tutto il contenuto dell'archivio
+tar xf $ARCHIVE
+
+# Rimuove tutti i dtb tranne quello del Banana Pi
+find boot/dtbs-lts -type f -name '*.dtb' ! -name 'sun7i-a20-bananapi.dtb' -delete
+
+# Crea boot/u-boot se non esiste
+mkdir -p boot/u-boot
+
+# Trova e sposta il file del bootloader nella root di boot/u-boot/
+find u-boot -type f -name 'u-boot-sunxi-with-spl.bin' -exec mv -f {} boot/u-boot/ \;
+
+# Rimuove sottodirectory residue in boot/u-boot
+find boot/u-boot -mindepth 1 -type d -exec rm -rf {} +
+
+# Sposta apks e extlinux in boot
+mv apks extlinux boot
+
+# Pulisce le cartelle residue
+rm -rf efi u-boot boot/grub
 ```
