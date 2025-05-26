@@ -54,8 +54,8 @@ find u-boot -type f -name 'u-boot-sunxi-with-spl.bin' -exec mv -f {} boot/u-boot
 # Rimuove sottodirectory residue in boot/u-boot
 find boot/u-boot -mindepth 1 -type d -exec rm -rf {} +
 
-# Sposta apks e extlinux in boot
-mv apks extlinux boot
+# Sposta extlinux in boot
+mv extlinux boot
 
 # Pulisce le cartelle residue
 rm -rf efi u-boot boot/grub
