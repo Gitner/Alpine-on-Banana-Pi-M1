@@ -5,18 +5,22 @@ format_and_mount_sd.sh
 ```
 #!/bin/bash
 
+# --- Richiesta automatica dei privilegi root ---
+if [ "$EUID" -ne 0 ]; then
+  echo "Lo script richiede i privilegi di root. Verrà riavviato con sudo..."
+  exec sudo "$0" "$@"
+fi
+
 set -e
 
-# Lista dei comandi richiesti
-REQUIRED_CMDS=("lsblk" "parted" "mkfs.vfat" "mount" "umount" "grep" "sudo" "awk")
-
+# --- Controllo prerequisiti ---
+REQUIRED_CMDS=("lsblk" "parted" "mkfs.vfat" "mount" "umount" "grep" "awk" "wget" "tar" "find" "dd")
 MISSING_CMDS=()
 for cmd in "${REQUIRED_CMDS[@]}"; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     MISSING_CMDS+=("$cmd")
   fi
 done
-
 if [ ${#MISSING_CMDS[@]} -ne 0 ]; then
   echo "I seguenti software sono necessari ma non installati:"
   for cmd in "${MISSING_CMDS[@]}"; do
@@ -26,11 +30,11 @@ if [ ${#MISSING_CMDS[@]} -ne 0 ]; then
   exit 1
 fi
 
+# --- Selezione del dispositivo ---
 echo "Dispositivi disponibili:"
 lsblk -d -o NAME,SIZE,MODEL | grep -E "^sd|^mmcblk"
 
 read -p "Inserisci il nome del dispositivo da formattare (es. sdb o mmcblk0): " DEV
-
 DEV="/dev/$DEV"
 
 if [ ! -b "$DEV" ]; then
@@ -45,54 +49,44 @@ if [ "$CONFIRM" != "SI" ]; then
   exit 1
 fi
 
-# Controlla e smonta eventuali partizioni già presenti e montate
+# --- Smonta eventuali partizioni montate ---
 for part in $(lsblk -ln -o NAME "$DEV" | tail -n +2); do
   PART_PATH="/dev/$part"
   if mountpoint -q "$(lsblk -ln -o MOUNTPOINT "$PART_PATH" | grep -v '^$')"; then
     echo "La partizione $PART_PATH è montata, eseguo umount..."
-    sudo umount "$PART_PATH"
+    umount "$PART_PATH"
   fi
 done
 
-for part in $(lsblk -ln -o NAME "$DEV" | tail -n +2); do
-  if mountpoint -q "/dev/$part"; then
-    sudo umount "/dev/$part"
-  fi
-done
-
-sudo parted -s "$DEV" mklabel msdos
-sudo parted -s "$DEV" mkpart primary fat32 2048s 100%
-
+# --- Identifica la partizione principale ---
 PART="${DEV}1"
 if [ ! -b "$PART" ]; then
   PART="${DEV}p1"
 fi
 
+# --- Sovrascrivi il primo MB per pulire la tabella partizioni ---
+echo "Pulizia del primo megabyte..."
+dd if=/dev/zero of="$DEV" bs=1M count=1 conv=fsync
+
+# --- Partiziona e formatta ---
+parted -s "$DEV" mklabel msdos
+parted -s "$DEV" mkpart primary fat32 2048s 100%
+
 sleep 2
 
-sudo parted -s "$DEV" set 1 boot on
-sudo mkfs.vfat -F 32 "$PART"
+parted -s "$DEV" set 1 boot on
+mkfs.vfat -F 32 "$PART"
 
+# --- Monta la partizione ---
 MOUNT_POINT="/mnt/sd_$(date +%s)"
-sudo mkdir -p "$MOUNT_POINT"
-sudo mount "$PART" "$MOUNT_POINT"
-
+mkdir -p "$MOUNT_POINT"
+mount "$PART" "$MOUNT_POINT"
 echo "La partizione è stata montata su $MOUNT_POINT"
-echo "Cambiando directory su $MOUNT_POINT..."
 cd "$MOUNT_POINT"
-exec bash
-```
-setup_alpine_bpi.sh
-```
-#!/bin/sh
 
-set -e
-
+# --- Scarica e prepara i file di Alpine/uboot ---
 BASE_URL="https://dl-cdn.alpinelinux.org/alpine"
-
-# Step 1: Trova l'ultima release disponibile per armv7
 branches=$(wget -qO- "$BASE_URL/" | grep -oE 'v[0-9]+\.[0-9]+/' | sed 's#/##' | awk '!seen[$0]++' | sort -Vr)
-
 uboot_file=""
 for branch in $branches; do
     RELEASE_URL="$BASE_URL/$branch/releases/armv7/"
@@ -111,33 +105,35 @@ if [ ! -f "$uboot_file" ]; then
     exit 1
 fi
 
-# Step 2: Estrazione e preparazione dei file
 echo "📦 Estrazione dei file..."
-ARCHIVE="$uboot_file"
+tar xf "$uboot_file"
 
-# Pulisce la cartella boot se esiste
-rm -rf boot
-
-# Estrae tutto il contenuto dell'archivio
-tar xf "$ARCHIVE"
-
-# Mantiene solo il dtb del Banana Pi
+# Mantieni solo il dtb del Banana Pi
 find boot/dtbs-lts -type f -name '*.dtb' ! -name 'sun7i-a20-bananapi.dtb' -delete
 
-# Crea boot/u-boot se non esiste
+# Crea boot/u-boot se non esiste e sposta il bootloader
 mkdir -p boot/u-boot
-
-# Trova e sposta il bootloader nella root di boot/u-boot/
 find u-boot -type f -name 'u-boot-sunxi-with-spl.bin' -exec mv -f {} boot/u-boot/ \;
 
-# Rimuove sotto-directory residue in boot/u-boot
+# Rimuovi eventuali sotto-directory residue in boot/u-boot
 find boot/u-boot -mindepth 1 -type d -exec rm -rf {} +
 
-# Sposta extlinux in boot
+# Sposta extlinux in boot se presente
 [ -d extlinux ] && mv extlinux boot
 
-# Pulisce cartelle residue
-rm -rf efi u-boot boot/grub
+# --- Scrivi il bootloader sulla SD ---
+if [ -f boot/u-boot/u-boot-sunxi-with-spl.bin ]; then
+  echo "Scrittura del bootloader sulla SD..."
+  dd if=boot/u-boot/u-boot-sunxi-with-spl.bin of="$DEV" bs=1024 seek=8 conv=fsync
+  sync
+  echo "✅ Bootloader scritto con successo."
+else
+  echo "❌ File bootloader non trovato: boot/u-boot/u-boot-sunxi-with-spl.bin"
+  exit 1
+fi
 
-echo "✅ Operazione completata."
+# Pulisce cartelle residue
+rm -rf efi u-boot boot/grub boot/u-boot
+
+echo "Operazione completata. La SD è pronta!"
 ```
