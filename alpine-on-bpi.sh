@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Richiesta automatica dei privilegi root
+# Automatically request root privileges
 if [ "$EUID" -ne 0 ]; then
-  echo "Lo script richiede i privilegi di root. Verrà riavviato con sudo..."
+  echo "This script requires root privileges. Restarting with sudo..."
   exec sudo "$0" "$@"
 fi
 
 set -e
 
-# Controllo prerequisiti
+# Check prerequisites
 REQUIRED_CMDS=("lsblk" "parted" "mkfs.vfat" "mount" "umount" "grep" "awk" "wget" "tar" "find" "dd")
 MISSING_CMDS=()
 for cmd in "${REQUIRED_CMDS[@]}"; do
@@ -17,53 +17,53 @@ for cmd in "${REQUIRED_CMDS[@]}"; do
   fi
 done
 if [ ${#MISSING_CMDS[@]} -ne 0 ]; then
-  echo "I seguenti software sono necessari ma non installati:"
+  echo "The following required software is missing:"
   for cmd in "${MISSING_CMDS[@]}"; do
     echo " - $cmd"
   done
-  echo "Installa i pacchetti mancanti e riprova."
+  echo "Please install the missing packages and try again."
   exit 1
 fi
 
-# Selezione del dispositivo
-echo "Dispositivi disponibili:"
+# Device selection
+echo "Available devices:"
 lsblk -d -o NAME,SIZE,MODEL | grep -E "^sd|^mmcblk"
 
-read -p "Inserisci il nome del dispositivo da formattare (es. sdb o mmcblk0): " DEV
+read -p "Enter the device name to format (e.g. sdb or mmcblk0): " DEV
 DEV="/dev/$DEV"
 
 if [ ! -b "$DEV" ]; then
-  echo "Dispositivo non trovato: $DEV"
+  echo "Device not found: $DEV"
   exit 1
 fi
 
-echo "ATTENZIONE: Tutti i dati su $DEV saranno cancellati!"
-read -p "Vuoi continuare? (scrivi 'SI' per continuare): " CONFIRM
-if [ "$CONFIRM" != "SI" ]; then
-  echo "Operazione annullata."
+echo "WARNING: All data on $DEV will be erased!"
+read -p "Do you want to continue? (type 'YES' to proceed): " CONFIRM
+if [ "$CONFIRM" != "YES" ]; then
+  echo "Operation cancelled."
   exit 1
 fi
 
-# Smonta eventuali partizioni montate
+# Unmount any mounted partitions
 for part in $(lsblk -ln -o NAME "$DEV" | tail -n +2); do
   PART_PATH="/dev/$part"
   if mountpoint -q "$(lsblk -ln -o MOUNTPOINT "$PART_PATH" | grep -v '^$')"; then
-    echo "La partizione $PART_PATH è montata, eseguo umount..."
+    echo "Partition $PART_PATH is mounted, unmounting..."
     umount "$PART_PATH"
   fi
 done
 
-# Identifica la partizione principale
+# Identify main partition
 PART="${DEV}1"
 if [ ! -b "$PART" ]; then
   PART="${DEV}p1"
 fi
 
-# Sovrascrivi il primo MB per pulire la tabella partizioni
-echo "Pulizia del primo megabyte..."
+# Overwrite first MB to clean partition table
+echo "Wiping the first megabyte..."
 dd if=/dev/zero of="$DEV" bs=1M count=1 conv=fsync
 
-# Partiziona e formatta
+# Partition and format
 parted -s "$DEV" mklabel msdos
 parted -s "$DEV" mkpart primary fat32 2048s 100%
 
@@ -72,66 +72,66 @@ sleep 2
 parted -s "$DEV" set 1 boot on
 mkfs.vfat -F 32 "$PART"
 
-# Monta la partizione
+# Mount the partition
 MOUNT_POINT="/mnt/sd_$(date +%s)"
 mkdir -p "$MOUNT_POINT"
 mount "$PART" "$MOUNT_POINT"
-echo "La partizione è stata montata su $MOUNT_POINT"
+echo "Partition mounted at $MOUNT_POINT"
 cd "$MOUNT_POINT"
 
-# Scarica e prepara i file di Alpine/uboot
+# Download and prepare Alpine/uboot files
 BASE_URL="https://dl-cdn.alpinelinux.org/alpine"
 branches=$(wget -qO- "$BASE_URL/" | grep -oE 'v[0-9]+\.[0-9]+/' | sed 's#/##' | awk '!seen[$0]++' | sort -Vr)
 uboot_file=""
 for branch in $branches; do
     RELEASE_URL="$BASE_URL/$branch/releases/armv7/"
-    echo "🔍 Controllo in: $RELEASE_URL"
+    echo "🔍 Checking: $RELEASE_URL"
     uboot_file=$(wget -qO- "$RELEASE_URL" | grep -oE 'alpine-uboot-[0-9]+\.[0-9]+\.[0-9]+-armv7\.tar\.gz' | sort -V | tail -n1)
     if [ -n "$uboot_file" ]; then
-        echo "✅ Trovato: $uboot_file"
-        echo "⬇️ Download in corso da: $RELEASE_URL$uboot_file"
+        echo "✅ Found: $uboot_file"
+        echo "⬇️ Downloading from: $RELEASE_URL$uboot_file"
         wget -c "$RELEASE_URL$uboot_file"
         break
     fi
 done
 
 if [ ! -f "$uboot_file" ]; then
-    echo "❌ Nessuna release alpine-uboot trovata in nessun ramo disponibile."
+    echo "❌ No alpine-uboot release found in any available branch."
     exit 1
 fi
 
-echo "📦 Estrazione dei file..."
+echo "📦 Extracting files..."
 tar xf "$uboot_file"
 
-# Mantieni solo il dtb del Banana Pi
+# Keep only Banana Pi dtb
 find boot/dtbs-lts -type f -name '*.dtb' ! -name 'sun7i-a20-bananapi.dtb' -delete
 
-# Crea boot/u-boot se non esiste e sposta il bootloader
+# Create boot/u-boot if missing and move bootloader
 mkdir -p boot/u-boot
 find u-boot -type f -name 'u-boot-sunxi-with-spl.bin' -exec mv -f {} boot/u-boot/ \;
 
-# Rimuovi eventuali sotto-directory residue in boot/u-boot
+# Remove any leftover subdirectories in boot/u-boot
 find boot/u-boot -mindepth 1 -type d -exec rm -rf {} +
 
-# Sposta extlinux in boot se presente
+# Move extlinux to boot if present
 [ -d extlinux ] && mv extlinux boot
 
-# Scrivi il bootloader sulla SD
+# Write bootloader to SD
 if [ -f boot/u-boot/u-boot-sunxi-with-spl.bin ]; then
-  echo "Scrittura del bootloader sulla SD..."
+  echo "Writing bootloader to SD..."
   dd if=boot/u-boot/u-boot-sunxi-with-spl.bin of="$DEV" bs=1024 seek=8 conv=fsync
   sync
-  echo "✅ Bootloader scritto con successo."
+  echo "✅ Bootloader written successfully."
 else
-  echo "❌ File bootloader non trovato: boot/u-boot/u-boot-sunxi-with-spl.bin"
+  echo "❌ Bootloader file not found: boot/u-boot/u-boot-sunxi-with-spl.bin"
   exit 1
 fi
 
-# Pulisce cartelle residue
+# Clean up leftover folders
 rm -rf efi u-boot boot/grub boot/u-boot "$uboot_file"
 
-# Scarica il file headless che abilita ssh
+# Download headless file to enable ssh
 curl -s https://api.github.com/repos/macmpi/alpine-linux-headless-bootstrap/releases/latest \
 | grep "headless.apkovl.tar.gz" | cut -d \( -f2 | cut -d \) -f1 | wget -qi -
 
-echo "Operazione completata. La SD è pronta!"
+echo "Done! The SD card is ready."
